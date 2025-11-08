@@ -1,8 +1,21 @@
-from flask import Flask, render_template, request, redirect, url_for
+from flask import Flask, render_template, request, redirect, url_for, session, flash
+from bson import ObjectId  # Para trabajar con _id en MongoDB
+from datetime import datetime  # Para registrar logs o timestamps si lo necesitas
+
 from models import (
-    alumnos_col, alumnos_password_col, alumnos_servicio_col, alumnos_servicio_new_col,
-    asistencia_col, asistencia_new_col, colegios_col, comentarios_col,
-    horarios_col, proyectos_col, usuarios_col, instituciones_col
+    alumnos_col,
+    alumnos_password_col,
+    alumnos_servicio_col,
+    alumnos_servicio_new_col,
+    asistencia_col,
+    asistencia_new_col,
+    colegios_col,
+    comentarios_col,
+    horarios_col,
+    proyectos_col,
+    usuarios_col,
+    instituciones_col,
+    logs_col  # ✅ Esta línea es la que agregamos para registrar acciones
 )
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -17,90 +30,364 @@ def dashboard():
 @app.route('/alumnos/registrar', methods=['GET', 'POST'])
 def registrar_alumno():
     if request.method == 'POST':
-        alumnos_col.insert_one({
-            "nombre": request.form['nombre'],
-            "apellido_paterno": request.form['apellido_paterno'],
-            "apellido_materno": request.form['apellido_materno'],
-            "matricula": request.form['matricula'],
-            "telefono": request.form['telefono'],
-            "email": request.form['email'],
-            "escolaridad": request.form['escolaridad'],
-            "semestre": request.form['semestre'],
-            "institucion": request.form['institucion'],
-            "clave_institucion": request.form['clave_institucion'],
-            "ocupacion": request.form['ocupacion'],
-            "comentarios": request.form['comentarios'],
+        datos = {
+            "nombre": request.form.get("nombre", "").strip(),
+            "apellido_paterno": request.form.get("apellido_paterno", "").strip(),
+            "apellido_materno": request.form.get("apellido_materno", "").strip(),
+            "matricula": request.form.get("matricula", "").strip(),
+            "telefono": request.form.get("telefono", "").strip(),
+            "email": request.form.get("email", "").strip(),
+            "escolaridad": request.form.get("escolaridad", "").strip(),
+            "semestre": request.form.get("semestre", "").strip(),
+            "institucion": request.form.get("institucion", "").strip(),
+            "clave_institucion": request.form.get("clave_institucion", "").strip(),
+            "ocupacion": request.form.get("ocupacion", "").strip(),
+            "comentarios": request.form.get("comentarios", "").strip(),
+            "documentacion": request.form.get("documentacion", "").strip(),
             "estado": "Activo"
-        })
-        return redirect(url_for('dashboard'))
-    return render_template('alumnos/registrar.html')
+        }
+
+        campos_obligatorios = ["nombre", "apellido_paterno", "matricula"]
+        faltantes = [campo for campo in campos_obligatorios if not datos[campo]]
+        if faltantes:
+            error = f"Faltan campos obligatorios: {', '.join(faltantes)}"
+            return render_template("alumnos/registrar_nuevo_alumno.html", error=error, datos=datos)
+
+        if alumnos_col.find_one({"matricula": datos["matricula"]}):
+            error = "Ya existe un alumno con esa matrícula."
+            return render_template("alumnos/registrar_nuevo_alumno.html", error=error, datos=datos)
+
+        try:
+            alumnos_col.insert_one(datos)
+            return redirect(url_for("registrar_alumno", mensaje="Alumno registrado correctamente"))
+        except Exception as e:
+            error = f"Ocurrió un error al registrar: {str(e)}"
+            return render_template("alumnos/registrar_nuevo_alumno.html", error=error, datos=datos)
+
+    # ← Aquí está el cambio importante: pasar datos vacíos en GET
+    mensaje = request.args.get("mensaje")
+    return render_template("alumnos/registrar_nuevo_alumno.html", mensaje=mensaje, datos={})
 
 @app.route('/alumnos/activar', methods=['GET', 'POST'])
 def activar_alumno():
-    if request.method == 'POST':
-        alumnos_col.update_one(
-            {"matricula": request.form['alumno']},
-            {"$set": {"estado": request.form['estado']}}
-        )
-        return redirect(url_for('activar_alumno'))
-    alumnos = list(alumnos_col.find({}, {"_id": 0, "matricula": 1, "nombre": 1}))
-    return render_template('alumnos/activar.html', alumnos=alumnos)
+    mensaje = None
+    error = None
 
-@app.route('/alumnos/contrasena', methods=['GET', 'POST'])
-def modificar_contrasena():
     if request.method == 'POST':
-        alumnos_password_col.update_one(
-            {"matricula": request.form['alumno']},
-            {"$set": {"password": request.form['nueva_contrasena']}},
-            upsert=True
-        )
-        return redirect(url_for('modificar_contrasena'))
-    alumnos = list(alumnos_col.find({}, {"_id": 0, "matricula": 1, "nombre": 1}))
-    return render_template('alumnos/modificar_contrasena.html', alumnos=alumnos)
+        matricula = request.form.get('alumno')
+        nuevo_estado = request.form.get('estado')
 
-@app.route('/alumnos/horario', methods=['GET', 'POST'])
-def asignar_horario():
+        if not matricula or not nuevo_estado:
+            error = "Debes seleccionar un alumno y un estado."
+        else:
+            try:
+                alumnos_col.update_one(
+                    {"matricula": matricula},
+                    {"$set": {"estado": nuevo_estado.capitalize()}}
+                )
+                mensaje = f"Estado actualizado a {nuevo_estado.capitalize()} correctamente."
+            except Exception as e:
+                error = f"Ocurrió un error al actualizar: {str(e)}"
+
+    alumnos = list(alumnos_col.find({}, {"matricula": 1, "nombre": 1}))
+    return render_template(
+        'alumnos/activar_e_inactivar_alumno.html',
+        alumnos=alumnos,
+        mensaje=mensaje,
+        error=error
+    )
+
+@app.route('/alumnos/modificar', methods=['GET', 'POST'])
+def modificar_alumno():
+    mensaje = None
+    error = None
+
     if request.method == 'POST':
-        horarios_col.update_one(
-            {"matricula": request.form['alumno']},
-            {"$set": {"horario": request.form['horario']}},
-            upsert=True
-        )
-        return redirect(url_for('asignar_horario'))
-    alumnos = list(alumnos_col.find({}, {"_id": 0, "matricula": 1, "nombre": 1}))
-    return render_template('alumnos/asignar_horario.html', alumnos=alumnos)
+        alumno_id = request.form.get('alumno')
+        if not alumno_id:
+            error = "Debes seleccionar un alumno."
+        else:
+            cambios = {
+                "nombre": request.form.get("nombre", "").strip(),
+                "apellido_paterno": request.form.get("apellido_paterno", "").strip(),
+                "apellido_materno": request.form.get("apellido_materno", "").strip(),
+                "telefono": request.form.get("telefono", "").strip(),
+                "email": request.form.get("email", "").strip(),
+                "matricula": request.form.get("matricula", "").strip(),
+                "escolaridad": request.form.get("escolaridad", "").strip(),
+                "semestre": request.form.get("semestre", "").strip(),
+                "institucion": request.form.get("institucion", "").strip(),
+                "carrera": request.form.get("carrera", "").strip(),
+                "comentarios": request.form.get("comentarios", "").strip()
+            }
 
+            cambios = {k: v for k, v in cambios.items() if v}
+
+            try:
+                alumnos_col.update_one(
+                    {"_id": ObjectId(alumno_id)},
+                    {"$set": cambios}
+                )
+                mensaje = "Datos del alumno actualizados correctamente."
+            except Exception as e:
+                error = f"Ocurrió un error al actualizar: {str(e)}"
+
+    alumnos = list(alumnos_col.find({}, {"_id": 1, "nombre": 1}))
+    return render_template(
+        'alumnos/modificar_datos_alumno.html',
+        alumnos=alumnos,
+        mensaje=mensaje,
+        error=error
+    )
+    
 @app.route('/alumnos/asignar_proyecto', methods=['GET', 'POST'])
 def asignar_proyecto():
+    mensaje = None
+    error = None
+
     if request.method == 'POST':
-        alumno_matricula = request.form['alumno']
-        proyecto_nombre = request.form['proyecto']
-        descripcion = request.form['descripcion']
+        alumno_matricula = request.form.get('alumno')
+        proyecto_nombre = request.form.get('proyecto')
+        descripcion = request.form.get('descripcion', '').strip()
+
+        if not alumno_matricula or not proyecto_nombre:
+            error = "Debes seleccionar un alumno y un proyecto."
+        else:
+            proyecto = proyectos_col.find_one({"nombre": proyecto_nombre})
+            if not proyecto:
+                error = "El proyecto seleccionado no existe."
+            else:
+                try:
+                    alumnos_col.update_one(
+                        {"matricula": alumno_matricula},
+                        {"$set": {
+                            "proyecto": proyecto_nombre,
+                            "descripcion_proyecto": descripcion,
+                            "id_proyecto": proyecto.get("id", proyecto.get("_id"))
+                        }}
+                    )
+                    mensaje = f"Proyecto asignado correctamente a {alumno_matricula}."
+                except Exception as e:
+                    error = f"Ocurrió un error al asignar el proyecto: {str(e)}"
+
+    alumnos = list(alumnos_col.find({}, {"matricula": 1, "nombre": 1}))
+    proyectos = list(proyectos_col.find({}, {"id": 1, "nombre": 1}))
+    return render_template(
+        'alumnos/asignar_cambiar_proyecto.html',
+        alumnos=alumnos,
+        proyectos=proyectos,
+        mensaje=mensaje,
+        error=error
+    )
+    
+@app.route('/alumnos/desasignar_proyecto', methods=['GET', 'POST'])
+def desasignar_proyecto():
+    mensaje = None
+    error = None
+
+    if request.method == 'POST':
+        alumno_matricula = request.form.get('alumno')
+
+        if not alumno_matricula:
+            error = "Debes seleccionar un alumno."
+        else:
+            try:
+                alumnos_col.update_one(
+                    {"matricula": alumno_matricula},
+                    {"$unset": {
+                        "proyecto": "",
+                        "descripcion_proyecto": "",
+                        "id_proyecto": ""
+                    }}
+                )
+                mensaje = f"Proyecto desasignado correctamente del alumno {alumno_matricula}."
+            except Exception as e:
+                error = f"Ocurrió un error al desasignar el proyecto: {str(e)}"
+
+    alumnos = list(alumnos_col.find({"proyecto": {"$exists": True}}, {"matricula": 1, "nombre": 1}))
+    return render_template(
+        'alumnos/desasignar_proyecto.html',
+        alumnos=alumnos,
+        mensaje=mensaje,
+        error=error
+    )
+    
+@app.route('/alumnos/modificar-contrasena', methods=['GET', 'POST'])
+def modificar_contrasena():
+    mensaje = request.args.get('mensaje')
+    error = request.args.get('error')
+
+    if request.method == 'POST':
+        alumno_matricula = request.form.get('alumno')
+        nueva_contrasena = request.form.get('contrasena')
+
+        if not alumno_matricula or not nueva_contrasena:
+            return redirect(url_for('modificar_contrasena', error="Debes seleccionar un alumno y proporcionar una nueva contraseña."))
+
+        try:
+            alumnos_col.update_one(
+                {"matricula": alumno_matricula},
+                {"$set": {"contrasena": nueva_contrasena}}
+            )
+            return redirect(url_for('modificar_contrasena', mensaje=f"Contraseña actualizada correctamente para el alumno {alumno_matricula}."))
+        except Exception as e:
+            return redirect(url_for('modificar_contrasena', error=f"Ocurrió un error al actualizar la contraseña: {str(e)}"))
+
+    alumnos = list(alumnos_col.find({}, {"matricula": 1, "nombre": 1}))
+    return render_template(
+        'alumnos/cambiar_contrasena_alumno.html',
+        alumnos=alumnos,
+        mensaje=mensaje,
+        error=error
+    )
+    
+@app.route('/alumnos/asignar-horario', methods=['GET', 'POST'])
+def asignar_horario():
+    mensaje = request.args.get('mensaje')
+    id_alumno = request.args.get('id_alumno')
+    seleccionado = None
+    horario = {}
+
+    if request.method == 'POST':
+        id_alumno = request.form.get('id_alumno')
+        sin_horario = 'sin_horario' in request.form
+
+        horario = {}
+        for dia in ['lunes', 'martes', 'miercoles', 'jueves', 'viernes', 'sabado']:
+            inicio = request.form.get(f'{dia}_inicio')
+            fin = request.form.get(f'{dia}_fin')
+            horario[dia] = [inicio, fin]
 
         alumnos_col.update_one(
-            {"matricula": alumno_matricula},
+            {"id_alumno": id_alumno},
             {"$set": {
-                "proyecto": proyecto_nombre,
-                "descripcion_proyecto": descripcion
+                "horario": horario,
+                "sin_horario": sin_horario
             }}
         )
-        return redirect(url_for('asignar_proyecto'))
+        return redirect(url_for('asignar_horario', id_alumno=id_alumno, mensaje='Horario actualizado correctamente'))
 
-    alumnos = list(alumnos_col.find({}, {"_id": 0, "matricula": 1, "nombre": 1}))
-    proyectos = list(proyectos_col.find({}, {"_id": 0, "id": 1, "nombre": 1}))
-    return render_template('alumnos/asignar_proyecto.html', alumnos=alumnos, proyectos=proyectos)
+    alumnos = list(alumnos_col.find({}, {
+        "id_alumno": 1,
+        "nombre": 1,
+        "apellido_paterno": 1,
+        "apellido_materno": 1
+    }))
+
+    if id_alumno:
+        seleccionado = alumnos_col.find_one({"id_alumno": id_alumno})
+        if seleccionado:
+            horario = seleccionado.get("horario", {})
+        else:
+            mensaje = f"No se encontró el alumno con ID {id_alumno}."
+
+    return render_template(
+        'alumnos/asignar_cambiar_horario.html',
+        alumnos=alumnos,
+        seleccionado=seleccionado,
+        horario=horario,
+        mensaje=mensaje
+    )
 
 @app.route('/alumnos/comentarios', methods=['GET', 'POST'])
 def comentarios_alumno():
-    if request.method == 'POST':
-        comentarios_col.insert_one({
-            "matricula": request.form['alumno'],
-            "comentario": request.form['comentario']
-        })
-        return redirect(url_for('comentarios_alumno'))
-    alumnos = list(alumnos_col.find({}, {"_id": 0, "matricula": 1, "nombre": 1}))
-    return render_template('alumnos/comentarios.html', alumnos=alumnos)
+    mensaje = None
+    error = None
 
+    if request.method == 'POST':
+        matricula = request.form.get('alumno')
+        comentario = request.form.get('comentario', '').strip()
+
+        if not matricula or not comentario:
+            error = "⚠ Debes seleccionar un alumno y escribir un comentario."
+        else:
+            alumno = alumnos_col.find_one({"matricula": matricula})
+            if alumno:
+                comentarios_col.insert_one({
+                    "matricula": matricula,
+                    "comentario": comentario,
+                    "fecha": datetime.now(),
+                    "usuario": session.get("usuario", "sistema")
+                })
+                mensaje = "✅ Comentario guardado correctamente."
+            else:
+                error = "⚠ La matrícula no corresponde a ningún alumno registrado."
+
+    alumnos = list(alumnos_col.find(
+        {"matricula": {"$nin": [None, "", "None", "Sin dato"]}},
+        {"_id": 0, "matricula": 1, "nombre": 1}
+    ))
+
+    return render_template('alumnos/comentarios_alumno.html',
+                           alumnos=alumnos,
+                           mensaje=mensaje,
+                           error=error)
+
+@app.route('/alumnos/log', methods=['GET', 'POST'])
+def log_alumno():
+    mensaje = None
+    error = None
+    resumen = {}
+    registros = []
+
+    # Lista de alumnos para el selector
+    alumnos_lista = []
+    for alumno in alumnos_col.find({
+        "matricula": {"$nin": [None, "", "None", "Sin dato"]},
+        "nombre": {"$nin": [None, "", "None", "Sin dato"]}
+    }, {
+        "_id": 0,
+        "matricula": 1,
+        "nombre": 1
+    }).sort("matricula", -1):
+        alumnos_lista.append({
+            "matricula": alumno["matricula"],
+            "nombre": alumno["nombre"].strip()
+        })
+
+    if request.method == 'POST':
+        matricula = request.form.get('alumno')
+        if not matricula:
+            error = "⚠ Debes seleccionar un alumno para generar el log."
+        else:
+            alumno = alumnos_col.find_one({"matricula": matricula})
+            if alumno:
+                resumen["datos"] = {
+                    "matricula": alumno.get("matricula"),
+                    "nombre": alumno.get("nombre"),
+                    "apellido_paterno": alumno.get("apellido_paterno"),
+                    "apellido_materno": alumno.get("apellido_materno"),
+                    "correo": alumno.get("correo"),
+                    "telefono": alumno.get("telefono"),
+                    "fecha_registro": alumno.get("fecha_registro"),
+                    "estado": alumno.get("estado"),
+                    "activo": alumno.get("activo"),
+                    "sin_horario": alumno.get("sin_horario"),
+                }
+
+                resumen["proyecto"] = alumno.get("proyecto")
+                resumen["institucion"] = alumno.get("institucion")
+                resumen["horario"] = alumno.get("horario", {})
+
+                resumen["comentarios"] = list(comentarios_col.find(
+                    {"matricula": matricula},
+                    {"_id": 0, "comentario": 1, "fecha": 1, "usuario": 1}
+                ).sort("fecha", -1))
+
+                registros = list(logs_col.find(
+                    {"matricula": matricula},
+                    {"_id": 0, "accion": 1, "fecha": 1, "usuario": 1}
+                ).sort("fecha", -1))
+            else:
+                error = "⚠ La matrícula no corresponde a ningún alumno registrado."
+
+    return render_template("alumnos/log_alumno.html",
+                           alumnos=alumnos_lista,
+                           resumen=resumen,
+                           registros=registros,
+                           mensaje=mensaje,
+                           error=error)
+    
 @app.route('/alumnos/eliminar', methods=['GET', 'POST'])
 def eliminar_alumno():
     if request.method == 'POST':
@@ -127,43 +414,6 @@ def consulta_alumnos():
                            areas=areas, tipos_servicio=tipos_servicio,
                            documentacion=documentacion, estados=estados)
  
-@app.route('/alumnos/modificar', methods=['GET', 'POST'])
-def modificar_alumno():
-    if request.method == 'POST':
-        alumno_id = request.form['alumno']
-        cambios = {
-            "nombre": request.form['nombre'],
-            "apellido_paterno": request.form['apellido_paterno'],
-            "apellido_materno": request.form['apellido_materno'],
-            "telefono": request.form['telefono'],
-            "email": request.form['email'],
-            "matricula": request.form['matricula'],
-            "escolaridad": request.form['escolaridad'],
-            "semestre": request.form['semestre'],
-            "institucion": request.form['institucion'],
-            "carrera": request.form['carrera'],
-            "comentarios": request.form['comentarios']
-        }
-        cambios = {k: v for k, v in cambios.items() if v}
-        if cambios:
-            alumnos_col.update_one({"_id": ObjectId(alumno_id)}, {"$set": cambios})
-        return redirect(url_for('modificar_alumno'))
-
-    alumnos = list(alumnos_col.find({}, {"_id": 1, "nombre": 1}))
-    return render_template('alumnos/modificar.html', alumnos=alumnos)
-
-@app.route('/alumnos/desasignar_proyecto', methods=['GET', 'POST'])
-def desasignar_proyecto():
-    if request.method == 'POST':
-        alumno_matricula = request.form['alumno']
-        alumnos_col.update_one(
-            {"matricula": alumno_matricula},
-            {"$unset": {
-                "proyecto": "",
-                "descripcion_proyecto": ""
-            }}
-        )
-        return redirect(url_for('desasignar_proyecto'))
 
     # Mostrar todos los alumnos que tengan el campo 'proyecto' definido
     alumnos = list(alumnos_col.find(
@@ -274,6 +524,12 @@ def consulta_instituciones():
 @app.errorhandler(404)
 def pagina_no_encontrada(e):
     return render_template('utils/error.html', error="Página no encontrada"), 404
+
+@app.route('/logout', methods=['POST'])
+def logout():
+    session.clear()
+    flash('Sesión cerrada correctamente.', 'info')
+    return redirect(url_for('login'))  # Redirige al login institucional
 
 # ========== INICIO ==========
 if __name__ == '__main__':

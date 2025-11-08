@@ -33,7 +33,7 @@
     </div>
 
     <div class="dashboard-body">
-      <h2>Desasignar proyecto</h2>
+      <h2>Asignar/Cambiar proyecto al alumno</h2>
 
       {% if mensaje %}
         <div class="alerta-exito">{{ mensaje }}</div>
@@ -42,20 +42,34 @@
         <div class="alerta-error">{{ error }}</div>
       {% endif %}
 
-      <form method="post" action="/alumnos/desasignar_proyecto" class="formulario-alumno">
+      <form method="post" action="/alumnos/asignar_proyecto" class="formulario-alumno">
         <fieldset>
           <legend>Seleccionar alumno</legend>
           <label for="alumno">Alumno:</label>
           <select name="alumno" id="alumno" required>
-            <option value="">Seleccione un alumno...</option>
+            <option value="">Seleccione un alumno</option>
             {% for alumno in alumnos %}
               <option value="{{ alumno.matricula }}">{{ alumno.nombre }}</option>
             {% endfor %}
           </select>
         </fieldset>
 
+        <fieldset>
+          <legend>Datos del proyecto</legend>
+          <label for="proyecto">Nombre del proyecto:</label>
+          <select name="proyecto" id="proyecto" required>
+            <option value="">Seleccione un proyecto</option>
+            {% for proyecto in proyectos %}
+              <option value="{{ proyecto.nombre }}">{{ proyecto.nombre }}</option>
+            {% endfor %}
+          </select>
+
+          <label for="descripcion">Descripción:</label>
+          <textarea name="descripcion" id="descripcion" rows="4"></textarea>
+        </fieldset>
+
         <div class="form-actions">
-          <button type="submit">Desasignar proyecto</button>
+          <button type="submit">Asignar proyecto</button>
         </div>
       </form>
     </div>
